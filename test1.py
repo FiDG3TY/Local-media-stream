@@ -1,1 +1,2 @@
-print("Test succed")
+print("Test succeed")
+print("Spelling changed")
