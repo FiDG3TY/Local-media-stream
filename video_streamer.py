@@ -1,46 +1,56 @@
-from flask import Flask, Response
+from flask import Flask, Response, stream_with_context
 import cv2
 
 app = Flask(__name__)
 
-def generate_frames():
-    # Use your webcam, or specify a video file
-    cap = cv2.VideoCapture(0)
+# A global variable to hold the camera object
+camera = None
 
+def get_camera():
+    global camera
+    if camera is None:
+        camera = cv2.VideoCapture(0)  # Open the camera
+    return camera
+
+def generate_frames():
+    camera = get_camera()
     while True:
-        # Capture frame-by-frame
-        success, frame = cap.read()
+        success, frame = camera.read()
         if not success:
             break
         else:
-            # Encode frame to JPEG
             ret, buffer = cv2.imencode('.jpg', frame)
             frame = buffer.tobytes()
-
-            # Yield the output frame in byte format
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    camera.release()
 
 @app.route('/video_feed')
 def video_feed():
-    # Video streaming route. Put this in the src attribute of an img tag
-    return Response(generate_frames(),
+    return Response(stream_with_context(generate_frames()),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/')
 def index():
-    # Home page that displays the video stream
-    return '''
-        <html>
+    return """
+    <html>
         <head>
-            <title>Video Streamer</title>
+            <title>Video Streaming</title>
         </head>
         <body>
-            <h1>Live Video Stream</h1>
-            <img src="/video_feed" width="640" height="480" />
+            <h1>Video Streaming</h1>
+            <img src="/video_feed" width="640" height="480">
         </body>
-        </html>
-        '''
+    </html>
+    """
 
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000)
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    global camera
+    if camera is not None:
+        camera.release()
+        camera = None
+    print("Camera released.")
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5002, debug=True)
