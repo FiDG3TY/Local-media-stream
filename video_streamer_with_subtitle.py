@@ -1,63 +1,56 @@
+from flask import Flask, render_template, Response
 import cv2
 
-def stream_from_camera():
-    cap = cv2.VideoCapture(0)  # 0 is usually the default camera
+app = Flask(__name__)
 
-    if not cap.isOpened():
-        print("Error: Could not open camera.")
-        return
+# Define global variables for camera and video capture
+camera = cv2.VideoCapture(0)  # Default to camera
+video_capture = None  # This will be used for video file streaming
 
+@app.route('/')
+def index():
+    # Render the HTML page with buttons to select stream source
+    return render_template('index.html')
+
+def generate_frames(capture):
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Error: Could not read frame from camera.")
+        success, frame = capture.read()
+        if not success:
             break
+        else:
+            # Encode frame as JPEG
+            ret, buffer = cv2.imencode('.jpg', frame)
+            frame = buffer.tobytes()
+            # Yield frame to be used in Response
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
-        cv2.imshow('Camera Stream', frame)
-
-        # Press 'q' to exit the camera stream
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-
-def stream_from_file(file_path):
-    cap = cv2.VideoCapture(file_path)
-
-    if not cap.isOpened():
-        print("Error: Could not open video file.")
-        return
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Reached end of video or error occurred.")
-            break
-
-        cv2.imshow('Video File Stream', frame)
-
-        # Press 'q' to exit the video file stream
-        if cv2.waitKey(25) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-
-def main():
-    print("Select streaming option:")
-    print("1. Stream from Camera")
-    print("2. Stream from Video File")
-
-    choice = input("Enter your choice (1/2): ")
-
-    if choice == '1':
-        stream_from_camera()
-    elif choice == '2':
-        file_path = input("Enter the path to the video file: ")
-        stream_from_file(file_path)
+@app.route('/video_feed')
+def video_feed():
+    # Serve video stream from camera or video file
+    if video_capture and video_capture.isOpened():
+        return Response(generate_frames(video_capture), mimetype='multipart/x-mixed-replace; boundary=frame')
+    elif camera.isOpened():
+        return Response(generate_frames(camera), mimetype='multipart/x-mixed-replace; boundary=frame')
     else:
-        print("Invalid choice. Please enter 1 or 2.")
+        return "Error: Unable to open video source"
 
-if __name__ == "__main__":
-    main()
+@app.route('/start_camera')
+def start_camera():
+    global video_capture, camera
+    if video_capture:
+        video_capture.release()
+    camera = cv2.VideoCapture(0)  # Switch to camera
+    return "Camera started", 200
+
+@app.route('/start_video')
+def start_video():
+    global video_capture, camera
+    if camera:
+        camera.release()
+    # Replace 'path/to/your/video.mp4' with your actual video file path
+    video_capture = cv2.VideoCapture('path/to/your/video.mp4')
+    return "Video started", 200
+
+if __name__ == '__main__':
+    app.run(debug=True)
