@@ -1,86 +1,89 @@
-from flask import Flask, render_template_string, send_from_directory
-import os
+from flask import Flask, Response, render_template_string, url_for
+import cv2
 
 app = Flask(__name__)
 
-# Predefined video file path
-VIDEO_FILE_PATH = '/Users/abhimanyuray/Desktop/mummy/Mothers_day.mp4'
+# Path to the predefined video file
+VIDEO_FILE_PATH = 'video.mp4'  # Ensure this file is present in the same directory
 
-# HTML template with embedded JavaScript and CSS
+# HTML template minimized and embedded in Python
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Video Streamer</title>
-    <style>
-        #videoElement {
-            width: 80%;
-            margin-top: 20px;
-        }
-        button {
-            padding: 10px 20px;
-            margin: 10px;
-            cursor: pointer;
-        }
-    </style>
 </head>
 <body>
     <h1>Select Streaming Option:</h1>
-    <button onclick="streamFromCamera()">Stream from Camera</button>
-    <button onclick="streamFromVideo()">Stream from Video File</button>
+    <button onclick="location.href='/camera'">Stream from Camera</button>
+    <button onclick="location.href='/video'">Stream from Video File</button>
     <video id="videoElement" controls autoplay></video>
 
     <script>
+        // Function to set video source dynamically
         const videoElement = document.getElementById('videoElement');
-
-        function stopStreamedVideo() {
-            const stream = videoElement.srcObject;
-            if (stream) {
-                const tracks = stream.getTracks();
-                tracks.forEach(track => track.stop());
-                videoElement.srcObject = null;
-            }
+        if (location.pathname === '/camera') {
+            videoElement.src = '{{ url_for("camera_feed") }}';
+        } else if (location.pathname === '/video') {
+            videoElement.src = '{{ url_for("video_feed") }}';
         }
 
-        function streamFromCamera() {
-            stopStreamedVideo();
-            navigator.mediaDevices.getUserMedia({ video: true })
-                .then(stream => {
-                    videoElement.srcObject = stream;
-                })
-                .catch(error => {
-                    console.error("Error accessing camera:", error);
-                    alert("Unable to access the camera.");
-                });
-        }
-
-        function streamFromVideo() {
-            stopStreamedVideo();
-            videoElement.src = '/static/video.mp4';  // Path to the predefined video file
-        }
-
-        // Stop streaming when the tab is closed or navigated away
-        window.addEventListener('beforeunload', stopStreamedVideo);
+        // Stop video stream when tab is closed
+        window.addEventListener('beforeunload', function () {
+            videoElement.pause();
+            videoElement.src = "";
+        });
     </script>
 </body>
 </html>
 """
 
+def generate_camera_feed():
+    """Generator function to yield camera frames."""
+    cap = cv2.VideoCapture(0)
+    while True:
+        success, frame = cap.read()
+        if not success:
+            break
+        _, buffer = cv2.imencode('.jpg', frame)
+        frame = buffer.tobytes()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    cap.release()
+
+def generate_video_feed():
+    """Generator function to yield video file frames."""
+    cap = cv2.VideoCapture(VIDEO_FILE_PATH)
+    while True:
+        success, frame = cap.read()
+        if not success:
+            break
+        _, buffer = cv2.imencode('.jpg', frame)
+        frame = buffer.tobytes()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    cap.release()
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-# Serve the video file from the static folder
-@app.route('/static/<path:filename>')
-def serve_static(filename):
-    return send_from_directory('static', filename)
+@app.route('/camera')
+def camera_page():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/video')
+def video_page():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/camera_feed')
+def camera_feed():
+    return Response(generate_camera_feed(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_video_feed(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    # Ensure the static folder exists and contains the video file
-    os.makedirs('static', exist_ok=True)
-    # Assume video.mp4 is in the same directory as this script, move it to static folder
-    if not os.path.exists(VIDEO_FILE_PATH):
-        print(f"Please place your video file at {VIDEO_FILE_PATH} or change the VIDEO_FILE_PATH in the script.")
     app.run(debug=True)
