@@ -1,87 +1,105 @@
-from flask import Flask, render_template_string, send_from_directory
+from flask import Flask, Response, stream_with_context, request, render_template_string
+import cv2
 import os
 
 app = Flask(__name__)
 
-# Define the path correctly inside the static folder
-VIDEO_FILE_PATH = 'static/Mothers_day.mp4'
+# Global variables for video file and camera index
+video_path = '/Users/abhimanyuray/Desktop/mummy/Mothers_day.mp4'
+video_capture = None
+CAMERA_INDEX = 0  # Update this if needed
 
-# HTML template with embedded JavaScript and CSS
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Streamer</title>
-    <style>
-        #videoElement {
-            width: 80%;
-            margin-top: 20px;
-        }
-        button {
-            padding: 10px 20px;
-            margin: 10px;
-            cursor: pointer;
-        }
-    </style>
-</head>
-<body>
-    <h1>Select Streaming Option:</h1>
-    <button onclick="streamFromCamera()">Stream from Camera</button>
-    <button onclick="streamFromVideo()">Stream from Video File</button>
-    <video id="videoElement" controls autoplay></video>
+def get_video_capture():
+    global video_capture
+    if video_capture is None:
+        if not os.path.exists(video_path):
+            print(f"Video file not found at path: {video_path}")
+            return None
+        video_capture = cv2.VideoCapture(video_path)  # Open the video file
+        if not video_capture.isOpened():
+            print("Failed to open video file.")
+            video_capture = None
+    return video_capture
 
-    <script>
-        const videoElement = document.getElementById('videoElement');
+def generate_camera_frames():
+    camera = cv2.VideoCapture(CAMERA_INDEX)  # Initialize the camera here
+    if not camera.isOpened():
+        print(f"Failed to open camera with index {CAMERA_INDEX}.")
+        return
+    try:
+        while True:
+            success, frame = camera.read()
+            if not success:
+                break
+            else:
+                ret, buffer = cv2.imencode('.jpg', frame)
+                frame = buffer.tobytes()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    finally:
+        camera.release()
+        print("Camera released.")
 
-        function stopStreamedVideo() {
-            const stream = videoElement.srcObject;
-            if (stream) {
-                const tracks = stream.getTracks();
-                tracks.forEach(track => track.stop());
-                videoElement.srcObject = null;
-            }
-        }
+def generate_video_frames():
+    video_capture = get_video_capture()
+    if video_capture is None:
+        print("No video file available.")
+        return
+    try:
+        while True:
+            success, frame = video_capture.read()
+            if not success:
+                break
+            else:
+                ret, buffer = cv2.imencode('.jpg', frame)
+                frame = buffer.tobytes()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    finally:
+        video_capture.release()
+        video_capture = None
+        print("Video capture released.")
 
-        function streamFromCamera() {
-            stopStreamedVideo();
-            navigator.mediaDevices.getUserMedia({ video: true })
-                .then(stream => {
-                    videoElement.srcObject = stream;
-                })
-                .catch(error => {
-                    console.error("Error accessing camera:", error);
-                    alert("Unable to access the camera.");
-                });
-        }
-
-        function streamFromVideo() {
-            stopStreamedVideo();
-            videoElement.src = '/static/Mothers_day.mp4';  // Correct path to the video file
-        }
-
-        // Stop streaming when the tab is closed or navigated away
-        window.addEventListener('beforeunload', stopStreamedVideo);
-    </script>
-</body>
-</html>
-"""
+@app.route('/video_feed')
+def video_feed():
+    stream_type = request.args.get('type', 'camera')
+    if stream_type == 'video':
+        return Response(stream_with_context(generate_video_frames()),
+                        mimetype='multipart/x-mixed-replace; boundary=frame')
+    elif stream_type == 'camera':
+        return Response(stream_with_context(generate_camera_frames()),
+                        mimetype='multipart/x-mixed-replace; boundary=frame')
+    else:
+        return "Invalid stream type", 400
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    stream_type = request.args.get('type', None)
+    return render_template_string("""
+    <html>
+        <head>
+            <title>Video Streaming</title>
+        </head>
+        <body>
+            <h1>Video Streaming</h1>
+            <form action="/" method="get">
+                <button type="submit" name="type" value="camera">Stream from Camera</button>
+                <button type="submit" name="type" value="video">Stream from Video</button>
+            </form>
+            {% if stream_type %}
+            <img src="/video_feed?type={{ stream_type }}" width="640" height="480">
+            {% endif %}
+        </body>
+    </html>
+    """, stream_type=stream_type)
 
-# Serve the video file from the static folder
-@app.route('/static/<path:filename>')
-def serve_static(filename):
-    return send_from_directory('static', filename)
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    global video_capture
+    if video_capture is not None:
+        video_capture.release()
+        video_capture = None
+    print("Video capture released.")
 
 if __name__ == '__main__':
-    # Ensure the static folder exists and contains the video file
-    os.makedirs('static', exist_ok=True)
-    # Check if the video file exists and if not, prompt the user
-    if not os.path.exists(VIDEO_FILE_PATH):
-        print(f"Please place your video file at {VIDEO_FILE_PATH} or create a symbolic link in the static folder.")
-    # Run the server on all interfaces and a specified port
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(host='0.0.0.0', port=5002, debug=True)
